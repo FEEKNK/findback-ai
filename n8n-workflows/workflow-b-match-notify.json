@@ -1,0 +1,89 @@
+{
+  "name": "FindBack - Workflow B: Match & Notify (Auto Matching Algorithm)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "match",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-webhook-match",
+      "name": "Webhook: Match Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/items?id=eq.{{ $json.body.itemId }}&select=*",
+        "headers": {
+          "apikey": "={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}",
+          "Authorization": "Bearer ={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}"
+        }
+      },
+      "id": "node-fetch-target-item",
+      "name": "Fetch Target Item",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/items?type=eq.{{ $json[0].type === 'LOST' ? 'FOUND' : 'LOST' }}&status=eq.OPEN&select=*",
+        "headers": {
+          "apikey": "={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}",
+          "Authorization": "Bearer ={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}"
+        }
+      },
+      "id": "node-fetch-candidates",
+      "name": "Fetch Opposite Candidates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const target = $('Fetch Target Item').item.json[0];\nconst candidates = $json;\nconst matches = [];\n\nfor (const cand of candidates) {\n  let score = 0;\n  const details = {};\n\n  // 1. Category Match (+30)\n  if (target.ai_category && cand.ai_category && target.ai_category.toLowerCase() === cand.ai_category.toLowerCase()) {\n    score += 30;\n    details.category = { match: true, score: 30 };\n  }\n\n  // 2. Tag Overlap - Jaccard Index (+40)\n  const targetTags = new Set(target.ai_tags || []);\n  const candTags = new Set(cand.ai_tags || []);\n  const overlap = [...targetTags].filter(t => candTags.has(t));\n  const totalUnique = new Set([...targetTags, ...candTags]);\n  if (totalUnique.size > 0) {\n    const jaccard = overlap.length / totalUnique.size;\n    const tagScore = Math.round(jaccard * 40);\n    score += tagScore;\n    details.tags = { overlap, score: tagScore };\n  }\n\n  // 3. Location Proximity (+20)\n  if (target.location_building && cand.location_building && target.location_building.trim() === cand.location_building.trim()) {\n    score += 20;\n    details.location = { match: true, score: 20 };\n  }\n\n  // 4. Time Window (+10 if within 14 days)\n  const tDate = new Date(target.event_date || target.created_at);\n  const cDate = new Date(cand.event_date || cand.created_at);\n  const diffDays = Math.abs(tDate - cDate) / (1000 * 60 * 60 * 24);\n  if (diffDays <= 14) {\n    score += 10;\n    details.time = { diffDays: Math.round(diffDays), score: 10 };\n  }\n\n  if (score >= 60) {\n    const lostId = target.type === 'LOST' ? target.id : cand.id;\n    const foundId = target.type === 'FOUND' ? target.id : cand.id;\n    matches.push({\n      lost_item_id: lostId,\n      found_item_id: foundId,\n      score,\n      match_details: details,\n      is_high_match: score >= 75\n    });\n  }\n}\n\nreturn matches.map(m => ({ json: m }));"
+      },
+      "id": "node-calc-scores",
+      "name": "Calculate Match Scores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/match_suggestions",
+        "headers": {
+          "apikey": "={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}",
+          "Authorization": "Bearer ={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}",
+          "Prefer": "resolution=merge-duplicates"
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"lost_item_id\": \"{{ $json.lost_item_id }}\",\n  \"found_item_id\": \"{{ $json.found_item_id }}\",\n  \"score\": {{ $json.score }},\n  \"match_details\": {{ JSON.stringify($json.match_details) }}\n}"
+      },
+      "id": "node-insert-match",
+      "name": "Upsert Match in Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1080, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Match Trigger": {
+      "main": [[{ "node": "Fetch Target Item", "type": "main", "index": 0 }]]
+    },
+    "Fetch Target Item": {
+      "main": [[{ "node": "Fetch Opposite Candidates", "type": "main", "index": 0 }]]
+    },
+    "Fetch Opposite Candidates": {
+      "main": [[{ "node": "Calculate Match Scores", "type": "main", "index": 0 }]]
+    },
+    "Calculate Match Scores": {
+      "main": [[{ "node": "Upsert Match in Supabase", "type": "main", "index": 0 }]]
+    }
+  }
+}

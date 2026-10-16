@@ -1,0 +1,58 @@
+{
+  "name": "FindBack - Workflow C: Fallback Retry (Cron 15min)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-retry",
+      "name": "Schedule: Every 15 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/items?ai_status=eq.PENDING&retry_count=lt.5&select=id,retry_count",
+        "headers": {
+          "apikey": "={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}",
+          "Authorization": "Bearer ={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}"
+        }
+      },
+      "id": "node-query-pending",
+      "name": "Query Pending Items",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/intake",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"itemId\": \"{{ $json.id }}\"\n}"
+      },
+      "id": "node-retry-intake",
+      "name": "Retry Intake Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [640, 300]
+    }
+  ],
+  "connections": {
+    "Schedule: Every 15 min": {
+      "main": [[{ "node": "Query Pending Items", "type": "main", "index": 0 }]]
+    },
+    "Query Pending Items": {
+      "main": [[{ "node": "Retry Intake Webhook", "type": "main", "index": 0 }]]
+    }
+  }
+}

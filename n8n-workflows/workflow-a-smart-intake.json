@@ -1,0 +1,164 @@
+{
+  "name": "FindBack - Workflow A: Smart Intake (Gemini AI Vision & Tagging)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "intake",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-webhook-intake",
+      "name": "Webhook: New Item Created",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/items?id=eq.{{ $json.body.itemId }}&select=*",
+        "headers": {
+          "apikey": "={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}",
+          "Authorization": "Bearer ={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}"
+        }
+      },
+      "id": "node-fetch-item",
+      "name": "Fetch Item from Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json[0].image_urls && $json[0].image_urls.length > 0 }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-check-has-image",
+      "name": "Has Image?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [\n      {\n        \"text\": \"วิเคราะห์รูปสิ่งของนี้เพื่อใช้ในระบบตามหาของหาย ให้ตอบเป็น JSON เท่านั้นในรูปแบบ:\\n{\\n  \\\"category\\\": \\\"หมวดหมู่ภาษาไทย (เช่น กระเป๋า, อุปกรณ์อิเล็กทรอนิกส์, บัตร, กุญแจ, เสื้อผ้า, ของใช้)\\\",\\n  \\\"color\\\": \\\"สีหลัก เช่น ดำ, ขาว, แดง\\\",\\n  \\\"brand\\\": \\\"ยี่ห้อ (ถ้ามี) หรือ null\\\",\\n  \\\"tags\\\": [\\\"แท็กคำสำคัญภาษาไทย 3-6 คำ เช่น กระเป๋าสตางค์, หนัง, มีซิป, สีดำ\\\"],\\n  \\\"description_th\\\": \\\"คำอธิบายลักษณะเด่นสั้นๆ 1-2 ประโยค\\\"\\n}\"\n      },\n      {\n        \"file_data\": {\n          \"mime_type\": \"image/webp\",\n          \"file_uri\": \"={{ $('Fetch Item from Supabase').item.json[0].image_urls[0] }}\"\n        }\n      }\n    ]\n  }],\n  \"generationConfig\": {\n    \"response_mime_type\": \"application/json\"\n  }\n}"
+      },
+      "id": "node-gemini-vision",
+      "name": "Gemini 2.0 Flash Vision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"วิเคราะห์ข้อความแจ้งสิ่งของต่อไปนี้: หัวข้อ: '{{ $('Fetch Item from Supabase').item.json[0].title }}', รายละเอียด: '{{ $('Fetch Item from Supabase').item.json[0].description || '' }}'\\nให้ตอบเป็น JSON เท่านั้น:\\n{\\n  \\\"category\\\": \\\"หมวดหมู่ภาษาไทย\\\",\\n  \\\"color\\\": \\\"สีหลัก\\\",\\n  \\\"brand\\\": \\\"ยี่ห้อ หรือ null\\\",\\n  \\\"tags\\\": [\\\"คำสำคัญ 3-5 คำ\\\"],\\n  \\\"description_th\\\": \\\"คำอธิบายสรุป\\\"\\n}\"\n    }]\n  }],\n  \"generationConfig\": {\n    \"response_mime_type\": \"application/json\"\n  }\n}"
+      },
+      "id": "node-gemini-text",
+      "name": "Gemini 2.0 Flash Text Only",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [880, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawItem = $('Fetch Item from Supabase').item.json[0];\nlet aiResult = {};\n\ntry {\n  const responseText = $json.candidates[0].content.parts[0].text;\n  aiResult = JSON.parse(responseText);\n} catch (e) {\n  aiResult = {\n    category: rawItem.category || 'อื่นๆ',\n    tags: [rawItem.title],\n    color: 'ไม่ระบุ',\n    description_th: rawItem.description || rawItem.title\n  };\n}\n\nreturn {\n  itemId: rawItem.id,\n  ai_category: aiResult.category,\n  ai_color: aiResult.color,\n  ai_tags: aiResult.tags || [],\n  ai_metadata: aiResult,\n  ai_status: 'SUCCESS'\n};"
+      },
+      "id": "node-parse-ai-output",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/items?id=eq.{{ $json.itemId }}",
+        "headers": {
+          "apikey": "={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}",
+          "Authorization": "Bearer ={{ $env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}",
+          "Prefer": "return=minimal"
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"ai_category\": \"{{ $json.ai_category }}\",\n  \"ai_color\": \"{{ $json.ai_color }}\",\n  \"ai_tags\": {{ JSON.stringify($json.ai_tags) }},\n  \"ai_metadata\": {{ JSON.stringify($json.ai_metadata) }},\n  \"ai_status\": \"SUCCESS\"\n}"
+      },
+      "id": "node-update-supabase",
+      "name": "Update Item in Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/match",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"itemId\": \"{{ $('Parse AI Output').item.json.itemId }}\"\n}"
+      },
+      "id": "node-trigger-match",
+      "name": "Trigger Workflow B (Match)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: New Item Created": {
+      "main": [[{ "node": "Fetch Item from Supabase", "type": "main", "index": 0 }]]
+    },
+    "Fetch Item from Supabase": {
+      "main": [[{ "node": "Has Image?", "type": "main", "index": 0 }]]
+    },
+    "Has Image?": {
+      "main": [
+        [{ "node": "Gemini 2.0 Flash Vision", "type": "main", "index": 0 }],
+        [{ "node": "Gemini 2.0 Flash Text Only", "type": "main", "index": 0 }]
+      ]
+    },
+    "Gemini 2.0 Flash Vision": {
+      "main": [[{ "node": "Parse AI Output", "type": "main", "index": 0 }]]
+    },
+    "Gemini 2.0 Flash Text Only": {
+      "main": [[{ "node": "Parse AI Output", "type": "main", "index": 0 }]]
+    },
+    "Parse AI Output": {
+      "main": [[{ "node": "Update Item in Supabase", "type": "main", "index": 0 }]]
+    },
+    "Update Item in Supabase": {
+      "main": [[{ "node": "Trigger Workflow B (Match)", "type": "main", "index": 0 }]]
+    }
+  }
+}
